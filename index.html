@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="Iron Log"/>
+  <meta name="theme-color" content="#080810"/>
+  <title>Iron Log</title>
+  <style>
+    *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+    body{margin:0;padding:0;background:#080810;font-family:'Courier New',monospace;overscroll-behavior:none;}
+    input[type=number]::-webkit-inner-spin-button,
+    input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0;}
+    input[type=number]{-moz-appearance:textfield;}
+    ::-webkit-scrollbar{display:none;}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+
+<script type="text/babel">
+const { useState, useEffect } = React;
+
+// ── DATA ─────────────────────────────────────────────────────────────────────
+
+const SCHEDULE = [
+  {
+    day:"Push", muscle:"Chest · Shoulders · Triceps", emoji:"💪", color:"#FF6B35",
+    exercises:[
+      {name:"Bench Press",              sets:4,reps:"8–10", notes:"Chest squeeze at top"},
+      {name:"Incline Dumbbell Press",   sets:3,reps:"10–12",notes:"45° incline, slow eccentric"},
+      {name:"Overhead Press",           sets:4,reps:"8–10", notes:"Keep core braced"},
+      {name:"Lateral Raises",           sets:3,reps:"12–15",notes:"Light weight, controlled"},
+      {name:"Tricep Pushdowns",         sets:3,reps:"12–15",notes:"Cable, squeeze at bottom"},
+      {name:"Overhead Tricep Extension",sets:3,reps:"10–12",notes:"Feel the stretch at top"},
+    ],
+  },
+  {
+    day:"Pull", muscle:"Back · Biceps · Rear Delts", emoji:"🏋️", color:"#4ECDC4",
+    exercises:[
+      {name:"Deadlift",               sets:4,reps:"5–6",  notes:"Hinge, not squat"},
+      {name:"Pull-Ups / Lat Pulldown",sets:4,reps:"8–10", notes:"Full range of motion"},
+      {name:"Seated Cable Row",       sets:3,reps:"10–12",notes:"Drive elbows back"},
+      {name:"Face Pulls",             sets:3,reps:"15–20",notes:"Great for shoulder health"},
+      {name:"Barbell Curl",           sets:3,reps:"10–12",notes:"No swinging"},
+      {name:"Hammer Curl",            sets:3,reps:"12–15",notes:"Targets brachialis"},
+    ],
+  },
+  {
+    day:"Legs", muscle:"Quads · Hamstrings · Glutes · Calves", emoji:"🦵", color:"#A855F7",
+    exercises:[
+      {name:"Squat",              sets:4,reps:"8–10", notes:"Depth below parallel"},
+      {name:"Romanian Deadlift",  sets:3,reps:"10–12",notes:"Feel hamstring stretch"},
+      {name:"Leg Press",          sets:3,reps:"12–15",notes:"Wide stance for glutes"},
+      {name:"Leg Curl",           sets:3,reps:"12–15",notes:"Hamstring isolation"},
+      {name:"Leg Extension",      sets:3,reps:"15–20",notes:"Quad finisher"},
+      {name:"Standing Calf Raise",sets:4,reps:"15–20",notes:"Full range, slow"},
+    ],
+  },
+];
+
+const GYM_DAYS = [1,3,6];
+const ANCHOR = {date:"2026-04-22",workoutIdx:0};
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const DOWS   = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+
+function toKey(d){
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+function getTodayKey(){return toKey(new Date());}
+
+function getWorkoutIdxForDate(dateKey){
+  const anchor=new Date(ANCHOR.date+"T00:00:00"),target=new Date(dateKey+"T00:00:00");
+  let gymCount=0,step=target>=anchor?1:-1,cur=new Date(anchor);
+  while(cur.toISOString().slice(0,10)!==target.toISOString().slice(0,10)){
+    cur.setDate(cur.getDate()+step);
+    if(GYM_DAYS.includes(cur.getDay()))gymCount+=step;
+  }
+  return((ANCHOR.workoutIdx+gymCount)%3+3)%3;
+}
+
+function getUpcoming(){
+  const todayKey=getTodayKey(),result=[],d=new Date();
+  let found=0;
+  for(let i=0;i<30&&found<3;i++){
+    if(GYM_DAYS.includes(d.getDay())){
+      const key=toKey(d);
+      result.push({
+        dateKey:key,
+        date:`${DOWS[d.getDay()]} ${MONTHS[d.getMonth()]} ${d.getDate()}`,
+        workout:getWorkoutIdxForDate(key),
+        label:key===todayKey?"Today":`In ${i} day${i===1?"":"s"}`,
+        isToday:key===todayKey,
+      });
+      found++;
+    }
+    d.setDate(d.getDate()+1);
+  }
+  return result;
+}
+
+// ── STORAGE (localStorage) ────────────────────────────────────────────────────
+const LS_KEY="ironlog-history-v1";
+function loadHistory(){
+  try{const v=localStorage.getItem(LS_KEY);return v?JSON.parse(v):{};}
+  catch(e){return{};}
+}
+function saveHistory(h){
+  try{localStorage.setItem(LS_KEY,JSON.stringify(h));}catch(e){}
+}
+
+// ── HELPERS ───────────────────────────────────────────────────────────────────
+function makeSets(n){return Array.from({length:n},()=>({w:"",done:false}));}
+function initSessionSets(wIdx){
+  return Object.fromEntries(SCHEDULE[wIdx].exercises.map((ex,i)=>[i,makeSets(ex.sets)]));
+}
+function maxWeightFor(history,wIdx,exIdx){
+  let best=null;
+  Object.values(history).filter(s=>s.workoutIdx===wIdx)
+    .forEach(s=>(s.sets[exIdx]||[]).forEach(set=>{
+      const w=parseFloat(set.w);
+      if(!isNaN(w)&&w>0&&(best===null||w>best))best=w;
+    }));
+  return best;
+}
+function lastMaxWeightFor(history,wIdx,exIdx){
+  const sessions=Object.entries(history).filter(([,s])=>s.workoutIdx===wIdx).sort(([a],[b])=>b.localeCompare(a));
+  if(!sessions.length)return null;
+  const ws=(sessions[0][1].sets[exIdx]||[]).map(s=>parseFloat(s.w)).filter(v=>!isNaN(v)&&v>0);
+  return ws.length?Math.max(...ws):null;
+}
+function progressData(history,wIdx,exIdx){
+  return Object.entries(history).filter(([,s])=>s.workoutIdx===wIdx).sort(([a],[b])=>a.localeCompare(b))
+    .map(([date,s])=>{
+      const ws=(s.sets[exIdx]||[]).map(s=>parseFloat(s.w)).filter(v=>!isNaN(v)&&v>0);
+      return{date:date.slice(5),max:ws.length?Math.max(...ws):0};
+    }).filter(d=>d.max>0);
+}
+function getLastSession(history){
+  const keys=Object.keys(history).sort((a,b)=>b.localeCompare(a));
+  if(!keys.length)return null;
+  return{date:keys[0],...history[keys[0]]};
+}
+
+// ── SPARKLINE ─────────────────────────────────────────────────────────────────
+function Sparkline({data,color}){
+  if(!data||data.length<2)return null;
+  const vals=data.map(d=>d.max),min=Math.min(...vals),max=Math.max(...vals),range=max-min||1;
+  const W=72,H=26,pad=3;
+  const pts=vals.map((v,i)=>[pad+(i/(vals.length-1))*(W-pad*2),H-pad-((v-min)/range)*(H-pad*2)]);
+  return(
+    <svg width={W} height={H}>
+      <polyline points={pts.map(p=>p.join(",")).join(" ")} fill="none" stroke={color} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" opacity="0.8"/>
+      {pts.map(([x,y],i)=><circle key={i} cx={x} cy={y} r={i===pts.length-1?3:2} fill={i===pts.length-1?color:"#222"} stroke={color} strokeWidth="1.2"/>)}
+    </svg>
+  );
+}
+
+// ── PROGRESS MODAL ────────────────────────────────────────────────────────────
+function ProgressModal({exercise,exIdx,workoutIdx,color,history,onClose}){
+  const data=progressData(history,workoutIdx,exIdx);
+  const pb=data.length?Math.max(...data.map(d=>d.max)):0;
+  return(
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"#000000cc",display:"flex",alignItems:"flex-end",justifyContent:"center",zIndex:100,backdropFilter:"blur(4px)"}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#111120",border:`1px solid ${color}44`,borderRadius:"20px 20px 0 0",padding:"22px 20px 48px",width:"100%",maxWidth:480}}>
+        <div style={{width:36,height:4,background:"#333",borderRadius:99,margin:"0 auto 18px"}}/>
+        <div style={{fontSize:17,fontWeight:700,marginBottom:2}}>{exercise.name}</div>
+        <div style={{fontSize:11,color:"#555",marginBottom:18}}>Weight progress</div>
+        {pb>0&&(
+          <div style={{background:`${color}18`,border:`1px solid ${color}44`,borderRadius:12,padding:"12px 16px",marginBottom:18,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div>
+              <div style={{fontSize:9,color:"#666",letterSpacing:2,textTransform:"uppercase"}}>Personal Best</div>
+              <div style={{fontSize:26,fontWeight:700,color}}>{pb} kg</div>
+            </div>
+            <span style={{fontSize:28}}>🏆</span>
+          </div>
+        )}
+        {data.length>=2&&(()=>{
+          const vals=data.map(d=>d.max),minV=Math.min(...vals),maxV=Math.max(...vals),range=maxV-minV||1;
+          return(
+            <div style={{background:"#0e0e18",borderRadius:12,padding:"16px 12px 28px",marginBottom:18}}>
+              <svg width="100%" height="70" style={{overflow:"visible"}}>
+                {data.map((d,i)=>{
+                  const xPct=`${(i/(data.length-1))*100}%`,y=50-((d.max-minV)/range)*40;
+                  return(
+                    <g key={i}>
+                      {i>0&&<line x1={`${((i-1)/(data.length-1))*100}%`} y1={50-((data[i-1].max-minV)/range)*40} x2={xPct} y2={y} stroke={color} strokeWidth="2" opacity="0.6"/>}
+                      <circle cx={xPct} cy={y} r="5" fill={i===data.length-1?color:"#1e1e30"} stroke={color} strokeWidth="2"/>
+                      <text x={xPct} y={y-10} textAnchor="middle" fill="#888" fontSize="9">{d.max}kg</text>
+                      <text x={xPct} y="70" textAnchor="middle" fill="#444" fontSize="8">{d.date}</text>
+                    </g>
+                  );
+                })}
+              </svg>
+            </div>
+          );
+        })()}
+        {data.length===0&&<div style={{textAlign:"center",color:"#555",padding:"20px 0",fontSize:13}}>No history yet!</div>}
+        <button onClick={onClose} style={{width:"100%",padding:14,background:"#1a1a2e",border:"none",borderRadius:12,color:"#888",fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>Close</button>
+      </div>
+    </div>
+  );
+}
+
+// ── APP ───────────────────────────────────────────────────────────────────────
+function App(){
+  const [activeTab,setActiveTab]=useState("upcoming");
+  const [activeSession,setActiveSession]=useState(null);
+  const [sessionSets,setSessionSets]=useState({});
+  const [history,setHistory]=useState(()=>loadHistory());
+  const [progressModal,setProgressModal]=useState(null);
+  const [sessionSaved,setSessionSaved]=useState(false);
+
+  const upcoming=getUpcoming();
+  const workoutIdx=activeSession!==null?upcoming[activeSession].workout:null;
+  const workout=workoutIdx!==null?SCHEDULE[workoutIdx]:null;
+
+  function startSession(idx){
+    setActiveSession(idx);
+    setSessionSets(initSessionSets(upcoming[idx].workout));
+    setSessionSaved(false);
+    setActiveTab("session");
+  }
+  function updateSet(exIdx,sIdx,field,value){
+    setSessionSets(prev=>({...prev,[exIdx]:prev[exIdx].map((s,i)=>i===sIdx?{...s,[field]:value}:s)}));
+  }
+  function toggleAllSets(exIdx){
+    setSessionSets(prev=>{
+      const sets=prev[exIdx],allDone=sets.every(s=>s.done);
+      return{...prev,[exIdx]:sets.map(s=>({...s,done:!allDone}))};
+    });
+  }
+  function saveSession(){
+    const dateKey=upcoming[activeSession].dateKey;
+    const newH={...history,[dateKey]:{workoutIdx,sets:sessionSets}};
+    setHistory(newH);
+    saveHistory(newH);
+    setSessionSaved(true);
+  }
+
+  const completedEx=workout?workout.exercises.filter((_,i)=>sessionSets[i]?.every(s=>s.done)).length:0;
+
+  const now=new Date(),todayKey=getTodayKey();
+  const calDates=(()=>{
+    const s=new Date(now.getFullYear(),now.getMonth(),1);
+    s.setDate(s.getDate()-s.getDay());
+    return Array.from({length:35},(_,i)=>{const d=new Date(s);d.setDate(s.getDate()+i);return d;});
+  })();
+  const calGymDays={};
+  calDates.forEach(d=>{if(GYM_DAYS.includes(d.getDay())){const k=toKey(d);calGymDays[k]=getWorkoutIdxForDate(k);}});
+  const lastSess=getLastSession(history);
+
+  return(
+    <div style={{minHeight:"100vh",background:"#080810",color:"#eeeae3",fontFamily:"'Courier New',monospace",maxWidth:480,margin:"0 auto"}}>
+
+      {/* Header */}
+      <div style={{padding:"env(safe-area-inset-top,20px) 20px 13px",paddingTop:"max(env(safe-area-inset-top),20px)",background:"linear-gradient(180deg,#0f0f1c 0%,#080810 100%)",borderBottom:"1px solid #18182a"}}>
+        <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:2}}>
+          <div style={{width:7,height:7,borderRadius:"50%",background:"#4ECDC4",boxShadow:"0 0 10px #4ECDC4"}}/>
+          <span style={{fontSize:9,letterSpacing:4,color:"#555",textTransform:"uppercase"}}>IRON LOG</span>
+        </div>
+        <h1 style={{fontSize:24,fontWeight:700,margin:0,letterSpacing:-0.5}}>Workout Tracker</h1>
+        <div style={{display:"flex",gap:14,marginTop:5,alignItems:"center"}}>
+          <span style={{fontSize:11,color:"#555"}}>Mon · Wed · Sat</span>
+          {upcoming[0]?.isToday&&<span style={{fontSize:11,color:SCHEDULE[upcoming[0].workout].color}}>▶ {SCHEDULE[upcoming[0].workout].day} Day Today</span>}
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div style={{display:"flex",borderBottom:"1px solid #18182a",background:"#080810",position:"sticky",top:0,zIndex:10}}>
+        {[
+          {id:"upcoming",label:"Plan"},
+          {id:"calendar",label:"Calendar"},
+          {id:"splits",label:"Splits"},
+          ...(activeSession!==null?[{id:"session",label:"▶ Session"}]:[]),
+        ].map(tab=>(
+          <button key={tab.id} onClick={()=>setActiveTab(tab.id)} style={{flex:1,padding:"13px 4px",border:"none",background:"none",color:activeTab===tab.id?"#4ECDC4":"#555",fontSize:10,letterSpacing:1,textTransform:"uppercase",cursor:"pointer",fontFamily:"inherit",borderBottom:activeTab===tab.id?"2px solid #4ECDC4":"2px solid transparent",transition:"all 0.2s"}}>{tab.label}</button>
+        ))}
+      </div>
+
+      <div style={{padding:"16px 16px 100px"}}>
+
+        {/* ══ PLAN ══ */}
+        {activeTab==="upcoming"&&(
+          <div>
+            {lastSess&&(
+              <div style={{background:"#111120",border:"1px solid #1e1e30",borderRadius:11,padding:"11px 13px",marginBottom:16,display:"flex",alignItems:"center",gap:10}}>
+                <span>✅</span>
+                <div>
+                  <div style={{fontSize:9,color:"#555",letterSpacing:2,textTransform:"uppercase"}}>Last Completed</div>
+                  <div style={{fontSize:12,color:"#eeeae3",marginTop:1}}>{lastSess.date} — <span style={{color:SCHEDULE[lastSess.workoutIdx].color}}>{SCHEDULE[lastSess.workoutIdx].day}</span></div>
+                </div>
+              </div>
+            )}
+            {upcoming.map((item,idx)=>{
+              const w=SCHEDULE[item.workout];
+              return(
+                <div key={idx} style={{background:"#111120",border:idx===0?`1px solid ${w.color}66`:"1px solid #1e1e30",borderRadius:13,padding:"15px",marginBottom:11,position:"relative",overflow:"hidden"}}>
+                  {idx===0&&<div style={{position:"absolute",top:0,left:0,right:0,height:2,background:`linear-gradient(90deg,${w.color},transparent)`}}/>}
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                    <div>
+                      <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:5}}>
+                        <span style={{fontSize:18}}>{w.emoji}</span>
+                        <span style={{fontSize:9,padding:"2px 7px",borderRadius:20,background:`${w.color}20`,color:w.color,letterSpacing:1,textTransform:"uppercase"}}>{item.label}</span>
+                      </div>
+                      <div style={{fontSize:16,fontWeight:700,marginBottom:2}}>{w.day} Day</div>
+                      <div style={{fontSize:11,color:"#777"}}>{w.muscle}</div>
+                      <div style={{fontSize:10,color:"#444",marginTop:2}}>{item.date}</div>
+                    </div>
+                    <button onClick={()=>startSession(idx)} style={{background:idx===0?w.color:"#1a1a2e",color:idx===0?"#fff":"#666",border:"none",borderRadius:10,padding:"9px 14px",fontSize:11,cursor:"pointer",fontFamily:"inherit",letterSpacing:1,textTransform:"uppercase",fontWeight:700}}>{idx===0?"Start ▶":"Preview"}</button>
+                  </div>
+                  <div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:10}}>
+                    {w.exercises.slice(0,4).map((ex,i)=><span key={i} style={{fontSize:9,padding:"2px 7px",borderRadius:20,background:"#1e1e30",color:"#555"}}>{ex.name}</span>)}
+                    {w.exercises.length>4&&<span style={{fontSize:9,color:"#444",padding:"2px 4px"}}>+{w.exercises.length-4}</span>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* ══ SESSION ══ */}
+        {activeTab==="session"&&workout&&(
+          <div>
+            <div style={{background:"#111120",border:`1px solid ${workout.color}44`,borderRadius:13,padding:"13px 15px",marginBottom:16}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:9}}>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontSize:18}}>{workout.emoji}</span>
+                  <div>
+                    <div style={{fontSize:15,fontWeight:700}}>{workout.day} Day</div>
+                    <div style={{fontSize:10,color:"#555"}}>{upcoming[activeSession]?.date}</div>
+                  </div>
+                </div>
+                <div style={{textAlign:"right"}}>
+                  <div style={{fontSize:20,fontWeight:700,color:workout.color}}>{completedEx}/{workout.exercises.length}</div>
+                  <div style={{fontSize:8,color:"#555",textTransform:"uppercase",letterSpacing:1}}>exercises</div>
+                </div>
+              </div>
+              <div style={{height:4,background:"#1e1e30",borderRadius:99}}>
+                <div style={{height:"100%",borderRadius:99,background:workout.color,width:`${(completedEx/workout.exercises.length)*100}%`,transition:"width 0.4s",boxShadow:`0 0 8px ${workout.color}88`}}/>
+              </div>
+            </div>
+
+            {workout.exercises.map((ex,exIdx)=>{
+              const sets=sessionSets[exIdx]||[];
+              const allDone=sets.length>0&&sets.every(s=>s.done);
+              const lastBest=lastMaxWeightFor(history,workoutIdx,exIdx);
+              const prog=progressData(history,workoutIdx,exIdx);
+              return(
+                <div key={exIdx} style={{background:"#111120",border:allDone?`1px solid ${workout.color}55`:"1px solid #1e1e30",borderRadius:13,marginBottom:11,overflow:"hidden",transition:"border-color 0.2s"}}>
+                  <div style={{padding:"12px 14px",background:allDone?`${workout.color}10`:"transparent",display:"flex",alignItems:"flex-start",gap:10}}>
+                    <div onClick={()=>toggleAllSets(exIdx)} style={{width:22,height:22,borderRadius:"50%",flexShrink:0,marginTop:2,border:allDone?"none":`2px solid #333`,background:allDone?workout.color:"transparent",display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,cursor:"pointer",transition:"all 0.2s",boxShadow:allDone?`0 0 8px ${workout.color}55`:"none"}}>
+                      {allDone?"✓":""}
+                    </div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:14,fontWeight:700,color:allDone?"#666":"#eeeae3",textDecoration:allDone?"line-through":"none"}}>{ex.name}</div>
+                      <div style={{fontSize:10,color:workout.color,marginTop:1}}>{ex.sets} sets × {ex.reps} reps</div>
+                    </div>
+                    <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:3,flexShrink:0}}>
+                      {lastBest!==null&&<div style={{fontSize:9,color:"#555"}}>prev <span style={{color:"#888",fontWeight:700}}>{lastBest}kg</span></div>}
+                      {prog.length>=2&&(
+                        <button onClick={()=>setProgressModal({exIdx})} style={{background:"none",border:"none",padding:0,cursor:"pointer"}}>
+                          <Sparkline data={prog} color={workout.color}/>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {!allDone&&(
+                    <div style={{padding:"2px 14px 13px"}}>
+                      <div style={{display:"grid",gridTemplateColumns:"22px 1fr 70px 26px",gap:"4px 8px",alignItems:"center",marginBottom:5}}>
+                        <span style={{fontSize:8,color:"#383848",textTransform:"uppercase",letterSpacing:1,textAlign:"center"}}>SET</span>
+                        <span style={{fontSize:8,color:"#383848",textTransform:"uppercase",letterSpacing:1}}>WEIGHT (kg)</span>
+                        <span style={{fontSize:8,color:"#383848",textTransform:"uppercase",letterSpacing:1}}>REPS</span>
+                        <span/>
+                      </div>
+                      {sets.map((set,sIdx)=>(
+                        <div key={sIdx} style={{display:"grid",gridTemplateColumns:"22px 1fr 70px 26px",gap:"4px 8px",alignItems:"center",marginBottom:5}}>
+                          <span style={{fontSize:10,color:"#444",textAlign:"center"}}>{sIdx+1}</span>
+                          <input type="number" inputMode="decimal" placeholder={lastBest!==null?`${lastBest}`:"kg"} value={set.w}
+                            onChange={e=>updateSet(exIdx,sIdx,"w",e.target.value)}
+                            style={{background:"#0d0d1a",border:`1px solid ${set.done?workout.color+"66":"#252535"}`,borderRadius:8,padding:"8px 10px",color:"#eeeae3",fontSize:15,fontFamily:"inherit",width:"100%",outline:"none",boxSizing:"border-box"}}
+                          />
+                          <input type="text" placeholder={ex.reps}
+                            style={{background:"#0d0d1a",border:"1px solid #252535",borderRadius:8,padding:"8px 8px",color:"#666",fontSize:13,fontFamily:"inherit",width:"100%",outline:"none",boxSizing:"border-box"}}
+                          />
+                          <div onClick={()=>updateSet(exIdx,sIdx,"done",!set.done)} style={{width:24,height:24,borderRadius:"50%",background:set.done?workout.color:"#1e1e30",border:set.done?"none":"1px solid #333",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,cursor:"pointer",transition:"all 0.15s",color:"#fff"}}>
+                            {set.done?"✓":""}
+                          </div>
+                        </div>
+                      ))}
+                      <div style={{fontSize:9,color:"#383848",marginTop:5,fontStyle:"italic"}}>💡 {ex.notes}</div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            {completedEx===workout.exercises.length&&!sessionSaved&&(
+              <div style={{background:`${workout.color}18`,border:`1px solid ${workout.color}55`,borderRadius:13,padding:"20px",textAlign:"center",marginTop:6}}>
+                <div style={{fontSize:32}}>🏆</div>
+                <div style={{fontSize:16,fontWeight:700,color:workout.color,marginTop:8}}>Session Complete!</div>
+                <div style={{fontSize:12,color:"#777",marginTop:4,marginBottom:16}}>Save to track your progress</div>
+                <button onClick={saveSession} style={{background:workout.color,color:"#fff",border:"none",borderRadius:12,padding:"12px 28px",fontSize:14,fontFamily:"inherit",cursor:"pointer",fontWeight:700,letterSpacing:1}}>💾 Save Session</button>
+              </div>
+            )}
+            {sessionSaved&&(
+              <div style={{background:"#111120",border:"1px solid #1e1e30",borderRadius:13,padding:"14px",textAlign:"center",marginTop:6}}>
+                <div style={{fontSize:12,color:"#4ECDC4"}}>✅ Saved! Rest up and recover 💪</div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ══ CALENDAR ══ */}
+        {activeTab==="calendar"&&(
+          <div>
+            <div style={{fontWeight:700,fontSize:14,marginBottom:12}}>{MONTHS[now.getMonth()]} {now.getFullYear()}</div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:3}}>
+              {DOWS.map(d=><div key={d} style={{textAlign:"center",fontSize:8,color:"#555",padding:"4px 0",letterSpacing:1}}>{d}</div>)}
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:3}}>
+              {calDates.map((d,i)=>{
+                const key=toKey(d),wIdx=calGymDays[key],w=wIdx!==undefined?SCHEDULE[wIdx]:null;
+                const isT=key===todayKey,inM=d.getMonth()===now.getMonth(),inH=!!history[key];
+                return(
+                  <div key={i} style={{aspectRatio:"1",borderRadius:7,background:w?`${w.color}1e`:isT?"#18182a":"transparent",border:isT?"1px solid #4ECDC4":w?`1px solid ${w.color}44`:"1px solid transparent",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",opacity:inM?1:0.2,position:"relative"}}>
+                    <span style={{fontSize:10,color:isT?"#4ECDC4":w?w.color:"#666",fontWeight:isT?700:400}}>{d.getDate()}</span>
+                    {w&&<span style={{fontSize:7,lineHeight:1}}>{w.emoji}</span>}
+                    {inH&&<div style={{position:"absolute",bottom:2,width:3,height:3,borderRadius:"50%",background:w?w.color:"#666"}}/>}
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{display:"flex",gap:12,flexWrap:"wrap",marginTop:14}}>
+              {SCHEDULE.map(s=>(
+                <div key={s.day} style={{display:"flex",alignItems:"center",gap:5}}>
+                  <div style={{width:9,height:9,borderRadius:3,background:s.color}}/>
+                  <span style={{fontSize:10,color:"#666"}}>{s.day}</span>
+                </div>
+              ))}
+              <div style={{display:"flex",alignItems:"center",gap:5}}>
+                <div style={{width:5,height:5,borderRadius:"50%",background:"#888"}}/>
+                <span style={{fontSize:10,color:"#666"}}>Logged</span>
+              </div>
+            </div>
+            <div style={{marginTop:22}}>
+              <div style={{fontSize:9,color:"#555",letterSpacing:3,textTransform:"uppercase",marginBottom:11}}>Past Sessions</div>
+              {Object.keys(history).length===0&&<div style={{fontSize:12,color:"#444",textAlign:"center",padding:"20px 0"}}>No sessions logged yet</div>}
+              {Object.entries(history).sort(([a],[b])=>b.localeCompare(a)).map(([date,sess])=>{
+                const w=SCHEDULE[sess.workoutIdx];
+                const allW=Object.values(sess.sets).flat().map(s=>parseFloat(s.w)).filter(v=>!isNaN(v)&&v>0);
+                const maxW=allW.length?Math.max(...allW):null;
+                return(
+                  <div key={date} style={{background:"#111120",border:"1px solid #1e1e30",borderRadius:10,padding:"11px 13px",marginBottom:7,display:"flex",alignItems:"center",gap:11}}>
+                    <span style={{fontSize:16}}>{w.emoji}</span>
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:12,fontWeight:700,color:w.color}}>{w.day} Day</div>
+                      <div style={{fontSize:10,color:"#555"}}>{date}</div>
+                    </div>
+                    {maxW&&<div style={{textAlign:"right"}}><div style={{fontSize:9,color:"#555"}}>top weight</div><div style={{fontSize:15,fontWeight:700}}>{maxW} kg</div></div>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* ══ SPLITS ══ */}
+        {activeTab==="splits"&&(
+          <div>
+            {SCHEDULE.map((s,wIdx)=>(
+              <div key={wIdx} style={{background:"#111120",border:"1px solid #1e1e30",borderRadius:13,marginBottom:14,overflow:"hidden"}}>
+                <div style={{background:`${s.color}12`,borderBottom:`1px solid ${s.color}33`,padding:"13px 15px",display:"flex",alignItems:"center",gap:11}}>
+                  <span style={{fontSize:24}}>{s.emoji}</span>
+                  <div>
+                    <div style={{fontSize:16,fontWeight:700}}>{s.day} Day</div>
+                    <div style={{fontSize:11,color:s.color}}>{s.muscle}</div>
+                  </div>
+                  <span style={{marginLeft:"auto",fontSize:10,color:"#555"}}>{s.exercises.length} exercises</span>
+                </div>
+                {s.exercises.map((ex,exIdx)=>{
+                  const best=maxWeightFor(history,wIdx,exIdx);
+                  const prog=progressData(history,wIdx,exIdx);
+                  return(
+                    <div key={exIdx} style={{padding:"11px 15px",borderBottom:exIdx<s.exercises.length-1?"1px solid #18182a":"none",display:"flex",justifyContent:"space-between",alignItems:"center",gap:10}}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:13}}>{ex.name}</div>
+                        <div style={{fontSize:10,color:"#444",marginTop:2}}>{ex.notes}</div>
+                        <div style={{fontSize:9,color:s.color,marginTop:2}}>{ex.sets}×{ex.reps}</div>
+                      </div>
+                      <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4,flexShrink:0}}>
+                        {best!==null?(
+                          <div style={{background:`${s.color}18`,border:`1px solid ${s.color}44`,borderRadius:8,padding:"4px 8px",textAlign:"center"}}>
+                            <div style={{fontSize:8,color:"#555",letterSpacing:1}}>BEST</div>
+                            <div style={{fontSize:14,fontWeight:700,color:s.color}}>{best}kg</div>
+                          </div>
+                        ):<div style={{fontSize:9,color:"#383848"}}>no data</div>}
+                        {prog.length>=2&&<Sparkline data={prog} color={s.color}/>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {progressModal&&workout&&(
+        <ProgressModal
+          exercise={workout.exercises[progressModal.exIdx]}
+          exIdx={progressModal.exIdx}
+          workoutIdx={workoutIdx}
+          color={workout.color}
+          history={history}
+          onClose={()=>setProgressModal(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
